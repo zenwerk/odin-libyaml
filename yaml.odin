@@ -87,12 +87,18 @@ register_user_unmarshaler :: proc(id: typeid, unmarshaler: User_Unmarshaler) -> 
 // Unmarshal_Context Helpers
 // ---------------------------------------------------------------------------
 
-// Delegate to standard decode for the current node (skips custom unmarshaler for this type)
+// Decode ctx.node into target using built-in reflection rules,
+// BYPASSING any custom unmarshaler registered for target's type.
+// Use this inside a custom unmarshaler to delegate to the standard decode
+// without re-triggering itself (avoids infinite recursion).
 unmarshal_ctx_decode :: proc(ctx: Unmarshal_Context, target: any) -> Unmarshal_Error {
 	return unmarshal_node_internal(ctx.doc, ctx.node, target, ctx.allocator)
 }
 
-// Decode a specific node (uses full unmarshal including custom unmarshalers)
+// Decode a specific node into target using full unmarshal dispatch,
+// INCLUDING custom unmarshalers. WARNING: if target's type is the same as
+// the calling custom unmarshaler's type, this causes infinite recursion.
+// Use unmarshal_ctx_decode instead when decoding the same type.
 unmarshal_ctx_decode_node :: proc(ctx: Unmarshal_Context, node: ^node_t, target: any) -> Unmarshal_Error {
 	return unmarshal_node(ctx.doc, node, target, ctx.allocator)
 }
@@ -111,9 +117,7 @@ unmarshal_ctx_node_value :: proc(ctx: Unmarshal_Context) -> string {
 // Get mapping pairs
 unmarshal_ctx_mapping_pairs :: proc(ctx: Unmarshal_Context) -> []node_pair_t {
 	if ctx.node == nil || ctx.node.type != .MAPPING_NODE { return nil }
-	start := ctx.node.data.mapping.pairs.start
-	top   := ctx.node.data.mapping.pairs.top
-	count := int(uintptr(top) - uintptr(start)) / size_of(node_pair_t)
+	start, count := node_mapping_pairs(ctx.node)
 	if count <= 0 { return nil }
 	return start[:count]
 }
@@ -121,9 +125,7 @@ unmarshal_ctx_mapping_pairs :: proc(ctx: Unmarshal_Context) -> []node_pair_t {
 // Get sequence items
 unmarshal_ctx_sequence_items :: proc(ctx: Unmarshal_Context) -> []node_item_t {
 	if ctx.node == nil || ctx.node.type != .SEQUENCE_NODE { return nil }
-	start := ctx.node.data.sequence.items.start
-	top   := ctx.node.data.sequence.items.top
-	count := int(uintptr(top) - uintptr(start)) / size_of(node_item_t)
+	start, count := node_sequence_items(ctx.node)
 	if count <= 0 { return nil }
 	return start[:count]
 }
@@ -363,9 +365,7 @@ unmarshal_mapping :: proc(doc: ^document_t, node: ^node_t, v: any, allocator: me
 	v := v
 	ti := reflect.type_info_base(type_info_of(v.id))
 
-	pairs_start := node.data.mapping.pairs.start
-	pairs_top   := node.data.mapping.pairs.top
-	count := int(uintptr(pairs_top) - uintptr(pairs_start)) / size_of(node_pair_t)
+	pairs_start, count := node_mapping_pairs(node)
 
 	#partial switch t in ti.variant {
 	case reflect.Type_Info_Struct:
@@ -452,9 +452,7 @@ unmarshal_sequence :: proc(doc: ^document_t, node: ^node_t, v: any, allocator: m
 	v := v
 	ti := reflect.type_info_base(type_info_of(v.id))
 
-	items_start := node.data.sequence.items.start
-	items_top   := node.data.sequence.items.top
-	count := int(uintptr(items_top) - uintptr(items_start)) / size_of(node_item_t)
+	items_start, count := node_sequence_items(node)
 
 	#partial switch t in ti.variant {
 	case reflect.Type_Info_Slice:
@@ -568,6 +566,22 @@ find_struct_field :: proc(fields: #soa[]reflect.Struct_Field, key: string) -> in
 // ---------------------------------------------------------------------------
 // Private: Helpers
 // ---------------------------------------------------------------------------
+
+@(private)
+node_mapping_pairs :: proc(node: ^node_t) -> (start: [^]node_pair_t, count: int) {
+	s := node.data.mapping.pairs.start
+	t := node.data.mapping.pairs.top
+	n := int(uintptr(t) - uintptr(s)) / size_of(node_pair_t)
+	return s, max(n, 0)
+}
+
+@(private)
+node_sequence_items :: proc(node: ^node_t) -> (start: [^]node_item_t, count: int) {
+	s := node.data.sequence.items.start
+	t := node.data.sequence.items.top
+	n := int(uintptr(t) - uintptr(s)) / size_of(node_item_t)
+	return s, max(n, 0)
+}
 
 @(private)
 node_to_string :: proc(node: ^node_t) -> string {
