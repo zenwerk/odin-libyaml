@@ -1,12 +1,18 @@
 package main
 
+import "core:mem"
+
 // YAML 楽器定義ファイルから読み込んだ情報を格納するランタイム構造体。
 // YAML_FORMAT.md の全パターンを網羅する。
 // unmarshal 一発マッピング対応の正規化形式。
+//
+// メモリ管理: すべてのアロケーションを Dynamic_Arena で一括管理する。
+// inst_destroy() で arena ごと一発解放。個別の delete は不要。
 
 // --- トップレベル ---
 
 Inst :: struct {
+	_arena:          mem.Dynamic_Arena     `yaml:"-"`,  // 全アロケーションを一括管理
 	name:            string,              // 楽器名 (必須)
 	vendor:          string,              // メーカー名 (必須)
 	manufacturer_id: [dynamic]u8,         // SysEx Manufacturer ID (1 or 3 bytes)
@@ -176,36 +182,15 @@ Inst_Sysex_Element :: struct {
 	base:  Maybe(int),                    // Channel の場合の base 値 (省略時 = 0)
 }
 
-// --- 解放 ---
+// --- 初期化・解放 ---
 
-inst_free :: proc(inst: ^Inst) {
-	delete(inst.manufacturer_id)
-	delete(inst.model_id)
-	delete(inst.drum)
+// arena allocator を返す。unmarshal にこれを渡すことで全アロケーションが arena に集約される。
+inst_init :: proc(inst: ^Inst) -> mem.Allocator {
+	mem.dynamic_arena_init(&inst._arena)
+	return mem.dynamic_arena_allocator(&inst._arena)
+}
 
-	for &cc in inst.cc {
-		delete(cc.enum_entries)
-	}
-	delete(inst.cc)
-
-	for &cc14 in inst.cc14 {
-		delete(cc14.enum_entries)
-	}
-	delete(inst.cc14)
-
-	for &nrpn in inst.nrpn {
-		delete(nrpn.enum_entries)
-	}
-	delete(inst.nrpn)
-
-	delete(inst.rpn)
-
-	for &sx in inst.sysex {
-		delete(sx.params)
-		delete(sx.body)
-	}
-	delete(inst.sysex)
-
-	delete(inst.layers)
-	delete(inst.parts)
+// arena ごと一括解放。個別の delete は不要。
+inst_destroy :: proc(inst: ^Inst) {
+	mem.dynamic_arena_destroy(&inst._arena)
 }

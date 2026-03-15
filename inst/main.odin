@@ -336,9 +336,10 @@ main :: proc() {
 	defer yaml.set_user_unmarshalers(nil)
 
 	inst: Inst
-	defer inst_free(&inst)
+	arena_alloc := inst_init(&inst)
+	defer inst_destroy(&inst)
 
-	err := yaml.unmarshal(data, &inst)
+	err := yaml.unmarshal(data, &inst, arena_alloc)
 	if err != nil {
 		fmt.eprintln("Unmarshal error:", err)
 		os.exit(1)
