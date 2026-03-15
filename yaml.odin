@@ -42,6 +42,98 @@ Unmarshal_Error :: union {
 }
 
 // ---------------------------------------------------------------------------
+// Custom Unmarshaler Types & Registry
+// ---------------------------------------------------------------------------
+
+// Context passed to custom unmarshalers (node operation helpers)
+Unmarshal_Context :: struct {
+	doc:       ^document_t,
+	node:      ^node_t,
+	allocator: mem.Allocator,
+}
+
+// Custom unmarshaler procedure type
+// v: target any value (points directly to data, not a pointer)
+User_Unmarshaler :: #type proc(ctx: Unmarshal_Context, v: any) -> Unmarshal_Error
+
+// Registry errors
+Register_User_Unmarshaler_Error :: enum {
+	None,
+	No_User_Unmarshaler,
+	Unmarshaler_Previously_Found,
+}
+
+@(private)
+_user_unmarshalers: ^map[typeid]User_Unmarshaler
+
+// Initialize the custom unmarshaler registry (same pattern as core:encoding/json)
+set_user_unmarshalers :: proc(m: ^map[typeid]User_Unmarshaler) {
+	_user_unmarshalers = m
+}
+
+// Register a custom unmarshaler for a specific type
+register_user_unmarshaler :: proc(id: typeid, unmarshaler: User_Unmarshaler) -> Register_User_Unmarshaler_Error {
+	if _user_unmarshalers == nil {
+		return .No_User_Unmarshaler
+	}
+	if id in _user_unmarshalers^ {
+		return .Unmarshaler_Previously_Found
+	}
+	_user_unmarshalers^[id] = unmarshaler
+	return .None
+}
+
+// ---------------------------------------------------------------------------
+// Unmarshal_Context Helpers
+// ---------------------------------------------------------------------------
+
+// Delegate to standard decode for the current node (skips custom unmarshaler for this type)
+unmarshal_ctx_decode :: proc(ctx: Unmarshal_Context, target: any) -> Unmarshal_Error {
+	return unmarshal_node_internal(ctx.doc, ctx.node, target, ctx.allocator)
+}
+
+// Decode a specific node (uses full unmarshal including custom unmarshalers)
+unmarshal_ctx_decode_node :: proc(ctx: Unmarshal_Context, node: ^node_t, target: any) -> Unmarshal_Error {
+	return unmarshal_node(ctx.doc, node, target, ctx.allocator)
+}
+
+// Get the node type
+unmarshal_ctx_node_type :: proc(ctx: Unmarshal_Context) -> node_type_t {
+	if ctx.node == nil { return .NO_NODE }
+	return ctx.node.type
+}
+
+// Get the scalar value as a string
+unmarshal_ctx_node_value :: proc(ctx: Unmarshal_Context) -> string {
+	return node_to_string(ctx.node)
+}
+
+// Get mapping pairs
+unmarshal_ctx_mapping_pairs :: proc(ctx: Unmarshal_Context) -> []node_pair_t {
+	if ctx.node == nil || ctx.node.type != .MAPPING_NODE { return nil }
+	start := ctx.node.data.mapping.pairs.start
+	top   := ctx.node.data.mapping.pairs.top
+	count := int(uintptr(top) - uintptr(start)) / size_of(node_pair_t)
+	if count <= 0 { return nil }
+	return start[:count]
+}
+
+// Get sequence items
+unmarshal_ctx_sequence_items :: proc(ctx: Unmarshal_Context) -> []node_item_t {
+	if ctx.node == nil || ctx.node.type != .SEQUENCE_NODE { return nil }
+	start := ctx.node.data.sequence.items.start
+	top   := ctx.node.data.sequence.items.top
+	count := int(uintptr(top) - uintptr(start)) / size_of(node_item_t)
+	if count <= 0 { return nil }
+	return start[:count]
+}
+
+// Get a node by its ID
+unmarshal_ctx_get_node :: proc(ctx: Unmarshal_Context, id: node_item_t) -> ^node_t {
+	return document_get_node(ctx.doc, id)
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -106,6 +198,22 @@ unmarshal_any :: proc(data: []byte, v: any, allocator := context.allocator) -> U
 
 @(private)
 unmarshal_node :: proc(doc: ^document_t, node: ^node_t, v: any, allocator: mem.Allocator) -> Unmarshal_Error {
+	v := v
+
+	// Custom unmarshaler check (highest priority)
+	if _user_unmarshalers != nil {
+		if unmarshaler, found := _user_unmarshalers^[v.id]; found && unmarshaler != nil {
+			ctx := Unmarshal_Context{doc = doc, node = node, allocator = allocator}
+			return unmarshaler(ctx, v)
+		}
+	}
+
+	return unmarshal_node_internal(doc, node, v, allocator)
+}
+
+// Internal node dispatcher (without custom unmarshaler check, used by unmarshal_ctx_decode)
+@(private)
+unmarshal_node_internal :: proc(doc: ^document_t, node: ^node_t, v: any, allocator: mem.Allocator) -> Unmarshal_Error {
 	v := v
 	ti := reflect.type_info_base(type_info_of(v.id))
 
