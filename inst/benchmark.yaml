@@ -1,0 +1,378 @@
+# benchmark_synth.yaml
+# YAML_FORMAT.md 全仕様パターン網羅ベンチマーク
+# 架空の楽器: 2レイヤー + ドラムセクション + エフェクト + SysEx を持つ多機能シンセサイザー
+
+name: benchmark_synth
+vendor: Benchmark
+manufacturer_id: [0x00, 0x21, 0x7F]   # 3-byte 拡張 Manufacturer ID
+model_id: [0x01, 0x0A]                # 2-byte Model ID
+channel: 1
+
+# --- note: フル指定 (ベロシティ対応 + ノート範囲制限) ---
+note:
+  velocity: true
+  range: [21, 108]                     # A0〜C8 (88鍵ピアノ範囲)
+
+# --- bend: 非対称レンジ ---
+bend:
+  up: 12
+  down: 2
+
+# --- aftertouch: 両方対応 ---
+aftertouch: both
+
+# --- program: 範囲指定 ---
+program: [0, 99]
+
+# --- bank: MSB + LSB 両方使用 ---
+bank:
+  msb: [0, 3]
+  lsb: [0, 7]
+  program: [0, 127]
+
+# --- drum: ノート番号マッピング ---
+drum:
+  - kick:    36
+  - snare:   38
+  - rim:     37
+  - cl_hat:  42
+  - op_hat:  46
+  - lo_tom:  43
+  - hi_tom:  50
+  - crash:   49
+  - ride:    51
+  - clap:    39
+
+# --- cc: 全パターン網羅 ---
+cc:
+  # plain CC (最短形式)
+  - cutoff:         74
+  - resonance:      71
+  - volume:         7
+  - pan:            10
+  - expression:     11
+  - mod_wheel:      1
+  - breath:         2
+  - portamento_time: 5
+
+  # plain CC (明示形式)
+  - name: osc_mix
+    cc: 17
+
+  # CC + default
+  - name: vcf_cutoff
+    cc: 43
+    default: 64
+
+  # CC + enum (範囲マッピング)
+  - name: osc1_wave
+    cc: 50
+    enum:
+      SQR: [0, 31]
+      TRI: [32, 63]
+      SAW: [64, 95]
+      SINE: [96, 127]
+
+  # CC + enum (単一値マッピング)
+  - name: osc1_octave
+    cc: 48
+    enum:
+      "32ft": 0
+      "16ft": 25
+      "8ft":  51
+      "4ft":  76
+      "2ft":  102
+
+  # CC + enum (on/off スイッチ)
+  - name: sustain
+    cc: 64
+    enum:
+      off: [0, 63]
+      on:  [64, 127]
+
+  # CC + enum (on/off 単一値)
+  - name: glide_on
+    cc: 65
+    enum:
+      off: 0
+      on: 64
+
+  # CC + signed range
+  - name: osc2_detune
+    cc: 94
+    signed:
+      min: -64
+      max: 63
+      offset: 64
+
+  # CC + array (連番展開: fx1_param[1]〜fx1_param[8] → CC 20〜27)
+  - name: fx1_param
+    cc: 20
+    array:
+      from: 1
+      to: 8
+      step: 1
+
+  # CC + array (step省略 = default 1: fx2_param[1]〜fx2_param[4] → CC 28〜31)
+  - name: fx2_param
+    cc: 28
+    array: { from: 1, to: 4 }
+
+  # CC + per-drum (drum ブロックの名前をドット記法で参照)
+  - kick.tune:    102
+  - kick.decay:   103
+  - kick.level:   104
+  - snare.tune:   105
+  - snare.snappy: 106
+  - snare.level:  107
+  - cl_hat.tune:  108
+  - cl_hat.decay: 109
+  - cl_hat.level: 110
+  - op_hat.tune:  111
+  - op_hat.decay: 112
+  - op_hat.level: 113
+
+# --- cc14: 全パターン網羅 ---
+cc14:
+  # 最短形式 (1要素マップ)
+  - filter_cutoff:  { msb: 19, lsb: 51 }
+  - filter_res:     { msb: 21, lsb: 53 }
+
+  # 明示形式
+  - name: master_volume
+    msb: 7
+    lsb: 39
+
+  # CC14 + signed
+  - name: osc2_freq
+    msb: 12
+    lsb: 44
+    signed:
+      min: -8192
+      max: 8191
+      offset: 8192
+
+  # CC14 + enum (14-bit 範囲の離散値)
+  - name: lfo1_rate
+    msb: 3
+    lsb: 35
+    enum:
+      4_whole:   [0, 819]
+      2_whole:   [1638, 2457]
+      whole:     [3276, 4095]
+      half:      [5734, 6553]
+      quarter:   [8192, 9011]
+      eighth:    [10649, 11468]
+      sixteenth: [13107, 13926]
+
+# --- nrpn: 全パターン網羅 ---
+nrpn:
+  # NRPN plain (8-bit)
+  - name: lfo1_rate
+    msb: 0
+    lsb: 0
+    range: [0, 255]
+
+  # NRPN plain (7-bit, range 省略なし)
+  - name: lfo1_delay
+    msb: 0
+    lsb: 1
+    range: [0, 127]
+
+  # NRPN + enum
+  - name: lfo1_shape
+    msb: 0
+    lsb: 2
+    enum:
+      sine:    0
+      tri:     1
+      sqr:     2
+      ramp_up: 3
+      ramp_dn: 4
+      s_and_h: 5
+      s_glide: 6
+
+  # NRPN + signed
+  - name: mod1_depth
+    msb: 0
+    lsb: 10
+    signed:
+      min: -128
+      max: 127
+      offset: 128
+
+  # NRPN + array (LSB 連番展開)
+  - name: osc_edit_param
+    msb: 0
+    lsb: 20
+    array:
+      from: 1
+      to: 8
+      step: 1
+
+  # NRPN per-note ドラムパラメータ (lsb: note)
+  - name: drum_filter_cutoff
+    msb: 0x14
+    lsb: note
+    range: [0, 127]
+  - name: drum_filter_reso
+    msb: 0x15
+    lsb: note
+    range: [0, 127]
+  - name: drum_eg_attack
+    msb: 0x16
+    lsb: note
+    range: [0, 127]
+  - name: drum_eg_decay
+    msb: 0x17
+    lsb: note
+    range: [0, 127]
+  - name: drum_volume
+    msb: 0x1A
+    lsb: note
+    range: [0, 127]
+  - name: drum_panpot
+    msb: 0x1C
+    lsb: note
+  - name: drum_reverb_send
+    msb: 0x1D
+    lsb: note
+    range: [0, 127]
+
+  # NRPN 10-bit 高解像度
+  - name: filter_cutoff
+    msb: 1
+    lsb: 0
+    range: [0, 1023]
+
+  # NRPN + enum (オシレーターレンジ)
+  - name: osc1_range
+    msb: 1
+    lsb: 14
+    enum:
+      "32ft": 0
+      "16ft": 1
+      "8ft":  2
+      "4ft":  3
+      "2ft":  4
+
+  # NRPN + array (FX パラメータ NRPN 版)
+  - name: fx1_nrpn_param
+    msb: 2
+    lsb: 0
+    range: [0, 255]
+    array: { from: 1, to: 12 }
+
+# --- layers: NRPN レイヤーオフセット ---
+layers:
+  - name: layer_a
+    nrpn_offset: 0
+  - name: layer_b
+    nrpn_offset: 2048
+
+# --- rpn: 全パターン網羅 ---
+rpn:
+  # RPN plain (range 指定)
+  - name: pitch_bend_sensitivity
+    msb: 0x00
+    lsb: 0x00
+    range: [0, 24]
+
+  # RPN + signed (14-bit offset)
+  - name: channel_fine_tuning
+    msb: 0x00
+    lsb: 0x01
+    signed:
+      min: -50
+      max: 50
+      offset: 8192
+
+  # RPN + signed (7-bit offset)
+  - name: channel_coarse_tuning
+    msb: 0x00
+    lsb: 0x02
+    signed:
+      min: -48
+      max: 48
+      offset: 64
+
+  # RPN plain
+  - name: tuning_program_select
+    msb: 0x00
+    lsb: 0x03
+    range: [0, 32]
+
+# --- sysex: 全 body 要素 type 網羅 ---
+sysex:
+  # パラメータなし固定 SysEx (params 省略)
+  - name: current_program_dump_req
+    body:
+      - 0xF0
+      - [0x00, 0x21, 0x7F]            # manufacturer_id (配列リテラル)
+      - { type: channel, base: 0x30 } # channel + base
+      - [0x01, 0x0A, 0x10]            # model_id + command
+      - 0xF7
+
+  # param 参照 (単一パラメータ)
+  - name: program_dump_req
+    params: [prog]
+    body:
+      - 0xF0
+      - [0x00, 0x21, 0x7F]
+      - { type: channel, base: 0x30 }
+      - [0x01, 0x0A, 0x1C]
+      - { type: param, name: prog }    # param 参照
+      - 0x00
+      - 0xF7
+
+  # device_id + checksum (Roland DT1 形式)
+  - name: dt1_write
+    params: [addr1, addr2, addr3, data]
+    body:
+      - 0xF0
+      - [0x00, 0x21, 0x7F]
+      - { type: device_id }            # device_id
+      - [0x01, 0x0A]
+      - 0x12                           # DT1 command
+      - { type: param, name: addr1 }
+      - { type: param, name: addr2 }
+      - { type: param, name: addr3 }
+      - { type: param, name: data }
+      - { type: checksum }             # checksum
+      - 0xF7
+
+  # vararg (可変長データ)
+  - name: bulk_write
+    params: [addr1, addr2, addr3, data]
+    body:
+      - 0xF0
+      - [0x00, 0x21, 0x7F]
+      - { type: device_id }
+      - [0x01, 0x0A]
+      - 0x12
+      - { type: param, name: addr1 }
+      - { type: param, name: addr2 }
+      - { type: param, name: addr3 }
+      - { type: vararg, name: data }   # vararg (複数バイト展開)
+      - { type: checksum }
+      - 0xF7
+
+  # channel (base なし = 0 ベース)
+  - name: device_inquiry
+    body:
+      - [0xF0, 0x7E]
+      - { type: channel }              # channel (base 省略)
+      - [0x06, 0x01, 0xF7]
+
+  # 複数パラメータ参照
+  - name: bank_program_dump_req
+    params: [bank, prog]
+    body:
+      - 0xF0
+      - [0x00, 0x21, 0x7F]
+      - { type: device_id }
+      - [0x01, 0x0A]
+      - 0x01
+      - { type: param, name: bank }
+      - { type: param, name: prog }
+      - 0xF7
