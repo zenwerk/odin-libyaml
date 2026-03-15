@@ -2,6 +2,7 @@ package main
 
 // YAML 楽器定義ファイルから読み込んだ情報を格納するランタイム構造体。
 // YAML_FORMAT.md の全パターンを網羅する。
+// unmarshal 一発マッピング対応の正規化形式。
 
 // --- トップレベル ---
 
@@ -17,13 +18,13 @@ Inst :: struct {
 	aftertouch:      Maybe(Aftertouch_Type),
 	program:         Maybe(Inst_Range),   // プログラムチェンジ [min, max]
 	bank:            Maybe(Inst_Bank),
-	drums:           [dynamic]Inst_Drum_Entry,
+	drum:            [dynamic]Inst_Drum_Entry,
 
-	ccs:             [dynamic]Inst_CC,
-	cc14s:           [dynamic]Inst_CC14,
-	nrpns:           [dynamic]Inst_NRPN,
-	rpns:            [dynamic]Inst_RPN,
-	sysexes:         [dynamic]Inst_Sysex,
+	cc:              [dynamic]Inst_CC,
+	cc14:            [dynamic]Inst_CC14,
+	nrpn:            [dynamic]Inst_NRPN,
+	rpn:             [dynamic]Inst_RPN,
+	sysex:           [dynamic]Inst_Sysex,
 
 	layers:          [dynamic]Inst_Layer,  // NRPN レイヤーオフセット
 	parts:           [dynamic]Inst_Layer,  // NRPN パートオフセット (layers と同構造)
@@ -37,32 +38,15 @@ Inst_Note :: struct {
 }
 
 // --- bend ---
-// 3 形式を union で表現:
-//   Bend_Symmetric  — range: 12
-//   Bend_Asymmetric — up: 12, down: 2
-//   Bend_Signed     — min/max/offset (14-bit 生値)
-//   nil             — bend: true (レンジ未指定)
+// flat struct で全パターンを表現。
+// up/down が非ゼロ → 非対称レンジ
+// range が非ゼロ → 対称レンジ
+// min/max/offset が非ゼロ → signed 生値
 
 Inst_Bend :: struct {
-	detail: Bend_Detail,
-}
-
-Bend_Detail :: union {
-	Bend_Symmetric,
-	Bend_Asymmetric,
-	Bend_Signed,
-}
-
-Bend_Symmetric :: struct {
-	range: int,                           // ±半音 (対称)
-}
-
-Bend_Asymmetric :: struct {
-	up:   int,                            // ベンドアップ半音数
-	down: int,                            // ベンドダウン半音数
-}
-
-Bend_Signed :: struct {
+	up:     int,                          // ベンドアップ半音数
+	down:   int,                          // ベンドダウン半音数
+	range_: int   `yaml:"range"`,        // ±半音 (対称)
 	min:    int,
 	max:    int,
 	offset: int,
@@ -77,6 +61,7 @@ Aftertouch_Type :: enum {
 }
 
 // --- program / bank ---
+// sequence [min, max] → positional mapping で自動変換
 
 Inst_Range :: struct {
 	min: int,
@@ -121,10 +106,10 @@ Inst_Enum_Entry :: struct {
 Inst_CC :: struct {
 	name:          string,                // パラメータ名 ("cutoff", "bd.tune" 等)
 	cc:            int,                   // CC 番号 (0-127)
-	default_value: Maybe(int),            // 初期値
-	enum_entries:  [dynamic]Inst_Enum_Entry,
-	signed_range:  Maybe(Inst_Signed),
-	array_range:   Maybe(Inst_Array),
+	default_value: Maybe(int)            `yaml:"default"`,
+	enum_entries:  [dynamic]Inst_Enum_Entry `yaml:"enum"`,
+	signed_range:  Maybe(Inst_Signed)    `yaml:"signed"`,
+	array_range:   Maybe(Inst_Array)     `yaml:"array"`,
 }
 
 // --- CC14 (14-bit) ---
@@ -133,22 +118,21 @@ Inst_CC14 :: struct {
 	name:         string,
 	msb:          int,                    // MSB CC 番号 (0-31)
 	lsb:          int,                    // LSB CC 番号 (32-63)
-	enum_entries: [dynamic]Inst_Enum_Entry,
-	signed_range: Maybe(Inst_Signed),
+	enum_entries: [dynamic]Inst_Enum_Entry `yaml:"enum"`,
+	signed_range: Maybe(Inst_Signed)     `yaml:"signed"`,
 }
 
 // --- NRPN ---
-// lsb が `note` (per-note ドラムパラメータ) の場合、lsb_is_note = true, lsb = 0
 
 Inst_NRPN :: struct {
 	name:         string,
 	msb:          int,                    // NRPN アドレス MSB (CC#99 値)
-	lsb:          int,                    // NRPN アドレス LSB (CC#98 値)。lsb_is_note=true の場合は無視
-	lsb_is_note:  bool,                  // true: LSB はランタイムでノート番号が入る
-	value_range:  Maybe(Inst_Range),      // 値の [min, max]
-	enum_entries: [dynamic]Inst_Enum_Entry,
-	signed_range: Maybe(Inst_Signed),
-	array_range:  Maybe(Inst_Array),      // LSB 連番展開
+	lsb:          int                    `yaml:"-"`,  // カスタムデコーダで処理
+	lsb_is_note:  bool                   `yaml:"-"`,  // カスタムデコーダで処理
+	value_range:  Maybe(Inst_Range)      `yaml:"range"`,
+	enum_entries: [dynamic]Inst_Enum_Entry `yaml:"enum"`,
+	signed_range: Maybe(Inst_Signed)     `yaml:"signed"`,
+	array_range:  Maybe(Inst_Array)      `yaml:"array"`,
 }
 
 // --- RPN ---
@@ -157,8 +141,8 @@ Inst_RPN :: struct {
 	name:         string,
 	msb:          int,                    // RPN アドレス MSB (CC#101 値)
 	lsb:          int,                    // RPN アドレス LSB (CC#100 値)
-	value_range:  Maybe(Inst_Range),
-	signed_range: Maybe(Inst_Signed),
+	value_range:  Maybe(Inst_Range)      `yaml:"range"`,
+	signed_range: Maybe(Inst_Signed)     `yaml:"signed"`,
 }
 
 // --- layers / parts ---
@@ -197,30 +181,30 @@ Inst_Sysex_Element :: struct {
 inst_free :: proc(inst: ^Inst) {
 	delete(inst.manufacturer_id)
 	delete(inst.model_id)
-	delete(inst.drums)
+	delete(inst.drum)
 
-	for &cc in inst.ccs {
+	for &cc in inst.cc {
 		delete(cc.enum_entries)
 	}
-	delete(inst.ccs)
+	delete(inst.cc)
 
-	for &cc14 in inst.cc14s {
+	for &cc14 in inst.cc14 {
 		delete(cc14.enum_entries)
 	}
-	delete(inst.cc14s)
+	delete(inst.cc14)
 
-	for &nrpn in inst.nrpns {
+	for &nrpn in inst.nrpn {
 		delete(nrpn.enum_entries)
 	}
-	delete(inst.nrpns)
+	delete(inst.nrpn)
 
-	delete(inst.rpns)
+	delete(inst.rpn)
 
-	for &sx in inst.sysexes {
+	for &sx in inst.sysex {
 		delete(sx.params)
 		delete(sx.body)
 	}
-	delete(inst.sysexes)
+	delete(inst.sysex)
 
 	delete(inst.layers)
 	delete(inst.parts)
