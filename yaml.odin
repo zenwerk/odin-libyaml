@@ -219,9 +219,18 @@ unmarshal_scalar :: proc(doc: ^document_t, node: ^node_t, v: any, allocator: mem
 		return Scalar_Conversion_Error{value = scalar, target_type = v.id}
 
 	case reflect.Type_Info_Enum:
-		// Try matching enum name
+		// Try matching enum name (exact)
 		for name, i in t.names {
 			if name == scalar {
+				assign_int(v, t.values[i])
+				return nil
+			}
+		}
+		// Try matching enum name (case-insensitive)
+		scalar_lower := strings.to_lower(scalar, context.temp_allocator)
+		for name, i in t.names {
+			name_lower := strings.to_lower(name, context.temp_allocator)
+			if name_lower == scalar_lower {
 				assign_int(v, t.values[i])
 				return nil
 			}
@@ -389,6 +398,31 @@ unmarshal_sequence :: proc(doc: ^document_t, node: ^node_t, v: any, allocator: m
 			elem_ptr := rawptr(uintptr(v.data) + uintptr(i * t.elem_size))
 			elem := any{elem_ptr, t.elem.id}
 			if uerr := unmarshal_node(doc, item_node, elem, allocator); uerr != nil {
+				return uerr
+			}
+		}
+		return nil
+
+	case reflect.Type_Info_Struct:
+		// Positional mapping: sequence elements → struct fields by order
+		if .raw_union in t.flags {
+			return Unsupported_Type_Error{v.id}
+		}
+		fields := reflect.struct_fields_zipped(ti.id)
+		n := min(count, len(fields))
+		for i := 0; i < n; i += 1 {
+			item_idx := items_start[i]
+			item_node := document_get_node(doc, item_idx)
+			if item_node == nil { continue }
+
+			field := fields[i]
+			// Skip fields tagged with yaml:"-"
+			tag_value := reflect.struct_tag_get(field.tag, "yaml")
+			if tag_value == "-" { continue }
+
+			field_ptr := rawptr(uintptr(v.data) + field.offset)
+			field_any := any{field_ptr, field.type.id}
+			if uerr := unmarshal_node(doc, item_node, field_any, allocator); uerr != nil {
 				return uerr
 			}
 		}
