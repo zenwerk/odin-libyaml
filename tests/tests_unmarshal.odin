@@ -2,6 +2,8 @@ package tests
 
 import "core:fmt"
 import "core:math"
+import "core:strconv"
+import "core:strings"
 import "core:testing"
 
 import yaml ".."
@@ -487,5 +489,234 @@ items:
 		testing.expect_value(t, d.items[0].value, 1)
 		testing.expect_value(t, d.items[1].name, "bar")
 		testing.expect_value(t, d.items[1].value, 2)
+	}
+}
+
+// ========================================================================
+// Custom Unmarshaler Tests
+// ========================================================================
+
+// All custom unmarshaler tests share a single global registry to avoid
+// race conditions from parallel test execution modifying _user_unmarshalers.
+@(test)
+test_custom_unmarshalers :: proc(t: ^testing.T) {
+	// --- Types used across sub-tests ---
+
+	Point :: struct {
+		x: int,
+		y: int,
+	}
+
+	FlexPoint :: struct {
+		x: int,
+		y: int,
+	}
+
+	KV_List :: struct {
+		keys:   [dynamic]string,
+		values: [dynamic]int,
+	}
+
+	// --- Unmarshaler procedures ---
+
+	// Helper: parse "x,y" into two int pointers
+	parse_xy :: proc(s: string, x: ^int, y: ^int) -> bool {
+		comma := strings.index_byte(s, ',')
+		if comma < 0 { return false }
+		if xv, xok := strconv.parse_int(s[:comma]); xok { x^ = xv }
+		if yv, yok := strconv.parse_int(s[comma+1:]); yok { y^ = yv }
+		return true
+	}
+
+	// Point: parse "x,y" scalar or delegate mapping to standard decode
+	point_unmarshaler :: proc(ctx: yaml.Unmarshal_Context, v: any) -> yaml.Unmarshal_Error {
+		if yaml.unmarshal_ctx_node_type(ctx) == .SCALAR_NODE {
+			s := yaml.unmarshal_ctx_node_value(ctx)
+			p := (^Point)(v.data)
+			if parse_xy(s, &p.x, &p.y) { return nil }
+			return yaml.Scalar_Conversion_Error{value = s, target_type = v.id}
+		}
+		return yaml.unmarshal_ctx_decode(ctx, v)
+	}
+
+	// FlexPoint: dispatch by node type (scalar/mapping/sequence)
+	flex_unmarshaler :: proc(ctx: yaml.Unmarshal_Context, v: any) -> yaml.Unmarshal_Error {
+		switch yaml.unmarshal_ctx_node_type(ctx) {
+		case .SCALAR_NODE:
+			p := (^FlexPoint)(v.data)
+			parse_xy(yaml.unmarshal_ctx_node_value(ctx), &p.x, &p.y)
+			return nil
+		case .MAPPING_NODE:
+			return yaml.unmarshal_ctx_decode(ctx, v)
+		case .SEQUENCE_NODE:
+			items := yaml.unmarshal_ctx_sequence_items(ctx)
+			p := (^FlexPoint)(v.data)
+			if len(items) >= 2 {
+				x_node := yaml.unmarshal_ctx_get_node(ctx, items[0])
+				y_node := yaml.unmarshal_ctx_get_node(ctx, items[1])
+				if x_node != nil {
+					yaml.unmarshal_ctx_decode_node(ctx, x_node, any{&p.x, typeid_of(int)})
+				}
+				if y_node != nil {
+					yaml.unmarshal_ctx_decode_node(ctx, y_node, any{&p.y, typeid_of(int)})
+				}
+			}
+			return nil
+		case .NO_NODE:
+			return nil
+		}
+		return nil
+	}
+
+	// KV_List: extract mapping pairs manually
+	kv_unmarshaler :: proc(ctx: yaml.Unmarshal_Context, v: any) -> yaml.Unmarshal_Error {
+		if yaml.unmarshal_ctx_node_type(ctx) != .MAPPING_NODE { return nil }
+		kv := (^KV_List)(v.data)
+		pairs := yaml.unmarshal_ctx_mapping_pairs(ctx)
+		for pair in pairs {
+			key_node := yaml.unmarshal_ctx_get_node(ctx, pair.key)
+			val_node := yaml.unmarshal_ctx_get_node(ctx, pair.value)
+			if key_node == nil || val_node == nil { continue }
+
+			// Decode key as string (cloned by unmarshal_scalar via allocator)
+			key_str: string
+			yaml.unmarshal_ctx_decode_node(ctx, key_node, any{&key_str, typeid_of(string)})
+
+			val_v: int
+			yaml.unmarshal_ctx_decode_node(ctx, val_node, any{&val_v, typeid_of(int)})
+
+			append(&kv.keys, key_str)
+			append(&kv.values, val_v)
+		}
+		return nil
+	}
+
+	dummy_proc :: proc(ctx: yaml.Unmarshal_Context, v: any) -> yaml.Unmarshal_Error { return nil }
+
+	// --- Registry error tests (before setting up registry) ---
+
+	Dummy :: struct { x: int }
+	yaml.set_user_unmarshalers(nil)
+	err_no_reg := yaml.register_user_unmarshaler(Dummy, dummy_proc)
+	testing.expect_value(t, err_no_reg, yaml.Register_User_Unmarshaler_Error.No_User_Unmarshaler)
+
+	// --- Set up shared registry ---
+
+	unmarshalers: map[typeid]yaml.User_Unmarshaler
+	defer delete(unmarshalers)
+	yaml.set_user_unmarshalers(&unmarshalers)
+	defer yaml.set_user_unmarshalers(nil)
+
+	// Register all custom unmarshalers
+	testing.expect_value(t, yaml.register_user_unmarshaler(Point, point_unmarshaler), yaml.Register_User_Unmarshaler_Error.None)
+	testing.expect_value(t, yaml.register_user_unmarshaler(FlexPoint, flex_unmarshaler), yaml.Register_User_Unmarshaler_Error.None)
+	testing.expect_value(t, yaml.register_user_unmarshaler(KV_List, kv_unmarshaler), yaml.Register_User_Unmarshaler_Error.None)
+
+	// Duplicate registration should fail
+	testing.expect_value(t, yaml.register_user_unmarshaler(Point, point_unmarshaler), yaml.Register_User_Unmarshaler_Error.Unmarshaler_Previously_Found)
+
+	// --- Sub-test: Basic scalar custom decode ---
+	{
+		Data :: struct { origin: Point }
+		input := `origin: "10,20"`
+		d: Data
+		err := yaml.unmarshal_string(input, &d)
+		testing.expect(t, err == nil, fmt.tprintf("basic scalar: unmarshal error: %v", err))
+		testing.expect_value(t, d.origin.x, 10)
+		testing.expect_value(t, d.origin.y, 20)
+	}
+
+	// --- Sub-test: Delegate to standard decode (mapping) ---
+	{
+		Data :: struct { pos: Point }
+		input := `
+pos:
+  x: 5
+  y: 10
+`
+		d: Data
+		err := yaml.unmarshal_string(input, &d)
+		testing.expect(t, err == nil, fmt.tprintf("delegate: unmarshal error: %v", err))
+		testing.expect_value(t, d.pos.x, 5)
+		testing.expect_value(t, d.pos.y, 10)
+	}
+
+	// --- Sub-test: Node type dispatch (mapping form) ---
+	{
+		Data :: struct { p: FlexPoint }
+		input := `
+p:
+  x: 3
+  y: 7
+`
+		d: Data
+		err := yaml.unmarshal_string(input, &d)
+		testing.expect(t, err == nil, fmt.tprintf("flex mapping: unmarshal error: %v", err))
+		testing.expect_value(t, d.p.x, 3)
+		testing.expect_value(t, d.p.y, 7)
+	}
+
+	// --- Sub-test: Node type dispatch (scalar form) ---
+	{
+		Data :: struct { p: FlexPoint }
+		input := `p: "1,2"`
+		d: Data
+		err := yaml.unmarshal_string(input, &d)
+		testing.expect(t, err == nil, fmt.tprintf("flex scalar: unmarshal error: %v", err))
+		testing.expect_value(t, d.p.x, 1)
+		testing.expect_value(t, d.p.y, 2)
+	}
+
+	// --- Sub-test: Node type dispatch (sequence form) ---
+	{
+		Data :: struct { p: FlexPoint }
+		input := `
+p:
+  - 100
+  - 200
+`
+		d: Data
+		err := yaml.unmarshal_string(input, &d)
+		testing.expect(t, err == nil, fmt.tprintf("flex sequence: unmarshal error: %v", err))
+		testing.expect_value(t, d.p.x, 100)
+		testing.expect_value(t, d.p.y, 200)
+	}
+
+	// --- Sub-test: Fallback (unregistered type uses reflection) ---
+	{
+		Unregistered :: struct {
+			name: string,
+			age:  int,
+		}
+		input := `
+name: Alice
+age: 30
+`
+		d: Unregistered
+		err := yaml.unmarshal_string(input, &d)
+		testing.expect(t, err == nil, fmt.tprintf("fallback: unmarshal error: %v", err))
+		testing.expect_value(t, d.name, "Alice")
+		testing.expect_value(t, d.age, 30)
+	}
+
+	// --- Sub-test: Mapping pairs helper ---
+	{
+		Data :: struct { data: KV_List }
+		input := `
+data:
+  a: 1
+  b: 2
+  c: 3
+`
+		d: Data
+		err := yaml.unmarshal_string(input, &d)
+		testing.expect(t, err == nil, fmt.tprintf("mapping pairs: unmarshal error: %v", err))
+		testing.expect_value(t, len(d.data.keys), 3)
+		testing.expect_value(t, len(d.data.values), 3)
+		if len(d.data.keys) == 3 {
+			testing.expect_value(t, d.data.values[0], 1)
+			testing.expect_value(t, d.data.values[1], 2)
+			testing.expect_value(t, d.data.values[2], 3)
+		}
 	}
 }
